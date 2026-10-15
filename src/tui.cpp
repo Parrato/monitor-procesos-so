@@ -6,14 +6,33 @@
 #include <ncurses.h>
 
 #include <algorithm>
+#include <cctype>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+namespace fs = std::filesystem;
 
 enum class SortMode {
     CPU,
     MEMORY
 };
+
+struct ThreadInfo {
+    int tid = 0;
+    std::string name;
+    char state = '?';
+};
+
+// --------------------------------------------------
+// CPU
+// --------------------------------------------------
 
 static void calculateCpuPercent(
     std::vector<ProcessInfo>& current,
@@ -38,7 +57,8 @@ static void calculateCpuPercent(
 
     for (auto& p : current) {
 
-        auto it = previousCpu.find(p.pid);
+        auto it =
+            previousCpu.find(p.pid);
 
         if (it == previousCpu.end()) {
             continue;
@@ -63,6 +83,10 @@ static void calculateCpuPercent(
     }
 }
 
+// --------------------------------------------------
+// FILTRO Y ORDENAMIENTO
+// --------------------------------------------------
+
 static std::vector<ProcessInfo> filterProcesses(
     const std::vector<ProcessInfo>& processes,
     const std::string& filter
@@ -74,6 +98,7 @@ static std::vector<ProcessInfo> filterProcesses(
     std::vector<ProcessInfo> result;
 
     for (const auto& p : processes) {
+
         if (
             p.name.find(filter)
                 != std::string::npos
@@ -99,6 +124,7 @@ static void sortProcesses(
             processes.end(),
             [](const ProcessInfo& a,
                const ProcessInfo& b) {
+
                 return a.cpuPercent
                     > b.cpuPercent;
             }
@@ -111,6 +137,7 @@ static void sortProcesses(
             processes.end(),
             [](const ProcessInfo& a,
                const ProcessInfo& b) {
+
                 return a.rssKB > b.rssKB;
             }
         );
@@ -133,7 +160,10 @@ static std::string shorten(
     }
 
     if (maxLength <= 3) {
-        return text.substr(0, maxLength);
+        return text.substr(
+            0,
+            maxLength
+        );
     }
 
     return text.substr(
@@ -141,6 +171,540 @@ static std::string shorten(
         maxLength - 3
     ) + "...";
 }
+
+// --------------------------------------------------
+// HISTORICO CPU
+// --------------------------------------------------
+
+static void updateHistory(
+    const std::vector<ProcessInfo>& processes,
+    std::unordered_map<int, std::deque<double>>& history
+) {
+    const std::size_t MAX_HISTORY = 30;
+
+    for (const auto& p : processes) {
+
+        auto& samples =
+            history[p.pid];
+
+        samples.push_back(
+            p.cpuPercent
+        );
+
+        if (
+            samples.size()
+            > MAX_HISTORY
+        ) {
+            samples.pop_front();
+        }
+    }
+}
+
+static void showHistory(
+    const ProcessInfo& process,
+    const std::unordered_map<
+        int,
+        std::deque<double>
+    >& history
+) {
+    erase();
+
+    int height;
+    int width;
+
+    getmaxyx(
+        stdscr,
+        height,
+        width
+    );
+
+    mvprintw(
+        0,
+        0,
+        "HISTORICO CPU - PID %d - %s",
+        process.pid,
+        process.name.c_str()
+    );
+
+    mvhline(
+        1,
+        0,
+        ACS_HLINE,
+        width
+    );
+
+    auto it =
+        history.find(process.pid);
+
+    if (
+        it == history.end()
+        ||
+        it->second.empty()
+    ) {
+        mvprintw(
+            3,
+            0,
+            "Todavia no hay suficientes muestras."
+        );
+    }
+    else {
+
+        const auto& samples =
+            it->second;
+
+        int row = 3;
+
+        int barMax =
+            std::max(
+                10,
+                width - 20
+            );
+
+        for (
+            double value : samples
+        ) {
+            if (
+                row >= height - 2
+            ) {
+                break;
+            }
+
+            int bars =
+                static_cast<int>(
+                    value
+                );
+
+            if (bars > barMax) {
+                bars = barMax;
+            }
+
+            mvprintw(
+                row,
+                0,
+                "%6.2f%% | ",
+                value
+            );
+
+            for (
+                int i = 0;
+                i < bars;
+                i++
+            ) {
+                addch('#');
+            }
+
+            row++;
+        }
+    }
+
+    mvprintw(
+        height - 1,
+        0,
+        "Presiona cualquier tecla para volver."
+    );
+
+    refresh();
+
+    timeout(-1);
+    getch();
+}
+
+// --------------------------------------------------
+// HILOS
+// --------------------------------------------------
+
+static bool isNumeric(
+    const std::string& value
+) {
+    if (value.empty()) {
+        return false;
+    }
+
+    for (char c : value) {
+        if (
+            !std::isdigit(
+                static_cast<unsigned char>(c)
+            )
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static std::vector<ThreadInfo>
+readThreads(int pid) {
+
+    std::vector<ThreadInfo>
+        threads;
+
+    std::string taskPath =
+        "/proc/"
+        + std::to_string(pid)
+        + "/task";
+
+    try {
+
+        for (
+            const auto& entry :
+            fs::directory_iterator(
+                taskPath
+            )
+        ) {
+
+            std::string id =
+                entry.path()
+                    .filename()
+                    .string();
+
+            if (!isNumeric(id)) {
+                continue;
+            }
+
+            ThreadInfo info;
+
+            info.tid =
+                std::stoi(id);
+
+            std::ifstream file(
+                entry.path()
+                / "status"
+            );
+
+            std::string key;
+
+            while (
+                file >> key
+            ) {
+
+                if (key == "Name:") {
+                    file >> info.name;
+                }
+
+                else if (
+                    key == "State:"
+                ) {
+                    file >> info.state;
+                }
+
+                std::string rest;
+                std::getline(
+                    file,
+                    rest
+                );
+            }
+
+            threads.push_back(
+                info
+            );
+        }
+    }
+    catch (...) {
+        // El proceso puede desaparecer
+        // mientras consultamos sus hilos.
+    }
+
+    std::sort(
+        threads.begin(),
+        threads.end(),
+        [](const ThreadInfo& a,
+           const ThreadInfo& b) {
+
+            return a.tid < b.tid;
+        }
+    );
+
+    return threads;
+}
+
+static void showThreads(
+    const ProcessInfo& process
+) {
+    auto threads =
+        readThreads(
+            process.pid
+        );
+
+    erase();
+
+    int height;
+    int width;
+
+    getmaxyx(
+        stdscr,
+        height,
+        width
+    );
+
+    mvprintw(
+        0,
+        0,
+        "HILOS - PID %d - %s",
+        process.pid,
+        process.name.c_str()
+    );
+
+    mvprintw(
+        1,
+        0,
+        "Total de hilos: %zu",
+        threads.size()
+    );
+
+    mvhline(
+        2,
+        0,
+        ACS_HLINE,
+        width
+    );
+
+    mvprintw(
+        3,
+        0,
+        "%-10s %-10s %s",
+        "TID",
+        "ESTADO",
+        "NOMBRE"
+    );
+
+    int row = 4;
+
+    for (
+        const auto& thread :
+        threads
+    ) {
+        if (
+            row >= height - 2
+        ) {
+            break;
+        }
+
+        mvprintw(
+            row,
+            0,
+            "%-10d %-10c %s",
+            thread.tid,
+            thread.state,
+            thread.name.c_str()
+        );
+
+        row++;
+    }
+
+    if (threads.empty()) {
+
+        mvprintw(
+            5,
+            0,
+            "No se pudieron leer los hilos o el proceso ya termino."
+        );
+    }
+
+    mvprintw(
+        height - 1,
+        0,
+        "Presiona cualquier tecla para volver."
+    );
+
+    refresh();
+
+    timeout(-1);
+    getch();
+}
+
+// --------------------------------------------------
+// ARBOL DE PROCESOS
+// --------------------------------------------------
+
+static void showProcessTree(
+    const std::vector<ProcessInfo>& processes
+) {
+    erase();
+
+    int height;
+    int width;
+
+    getmaxyx(
+        stdscr,
+        height,
+        width
+    );
+
+    mvprintw(
+        0,
+        0,
+        "ARBOL DE PROCESOS"
+    );
+
+    mvhline(
+        1,
+        0,
+        ACS_HLINE,
+        width
+    );
+
+    std::unordered_map<
+        int,
+        const ProcessInfo*
+    > byPid;
+
+    std::unordered_map<
+        int,
+        std::vector<const ProcessInfo*>
+    > children;
+
+    for (
+        const auto& p :
+        processes
+    ) {
+        byPid[p.pid] = &p;
+
+        children[p.ppid]
+            .push_back(&p);
+    }
+
+    for (
+        auto& pair :
+        children
+    ) {
+        std::sort(
+            pair.second.begin(),
+            pair.second.end(),
+            [](const ProcessInfo* a,
+               const ProcessInfo* b) {
+
+                return a->pid < b->pid;
+            }
+        );
+    }
+
+    std::vector<
+        const ProcessInfo*
+    > roots;
+
+    for (
+        const auto& p :
+        processes
+    ) {
+        if (
+            p.ppid == 0
+            ||
+            byPid.find(p.ppid)
+                == byPid.end()
+        ) {
+            roots.push_back(&p);
+        }
+    }
+
+    int row = 2;
+
+    std::unordered_set<int>
+        visited;
+
+    std::function<void(
+        const ProcessInfo*,
+        int
+    )> renderNode;
+
+    renderNode =
+        [&](const ProcessInfo* p,
+            int depth) {
+
+        if (
+            row >= height - 2
+        ) {
+            return;
+        }
+
+        if (
+            visited.find(p->pid)
+            != visited.end()
+        ) {
+            return;
+        }
+
+        visited.insert(p->pid);
+
+        std::string prefix(
+            depth * 2,
+            ' '
+        );
+
+        std::string line =
+            prefix
+            + (depth > 0
+                ? "|- "
+                : "")
+            + std::to_string(
+                p->pid
+            )
+            + " "
+            + p->name;
+
+        mvprintw(
+            row,
+            0,
+            "%s",
+            shorten(
+                line,
+                width - 1
+            ).c_str()
+        );
+
+        row++;
+
+        auto it =
+            children.find(
+                p->pid
+            );
+
+        if (
+            it != children.end()
+        ) {
+            for (
+                const auto* child :
+                it->second
+            ) {
+                renderNode(
+                    child,
+                    depth + 1
+                );
+            }
+        }
+    };
+
+    for (
+        const auto* root :
+        roots
+    ) {
+        renderNode(
+            root,
+            0
+        );
+
+        if (
+            row >= height - 2
+        ) {
+            break;
+        }
+    }
+
+    mvprintw(
+        height - 1,
+        0,
+        "Presiona cualquier tecla para volver."
+    );
+
+    refresh();
+
+    timeout(-1);
+    getch();
+}
+
+// --------------------------------------------------
+// DIBUJO PRINCIPAL
+// --------------------------------------------------
 
 static void drawScreen(
     const std::vector<ProcessInfo>& processes,
@@ -237,7 +801,7 @@ static void drawScreen(
     );
 
     const int firstTableRow = 5;
-    const int footerRows = 3;
+    const int footerRows = 4;
 
     int availableRows =
         height
@@ -281,15 +845,22 @@ static void drawScreen(
             firstTableRow
             + screenRow;
 
-        if (index == selected) {
-            attron(A_REVERSE);
+        if (
+            index == selected
+        ) {
+            attron(
+                A_REVERSE
+            );
         }
 
         if (
-            p.state == 'Z' ||
+            p.state == 'Z'
+            ||
             p.state == 'D'
         ) {
-            attron(A_BOLD);
+            attron(
+                A_BOLD
+            );
         }
 
         int commandWidth =
@@ -322,39 +893,56 @@ static void drawScreen(
         );
 
         if (
-            p.state == 'Z' ||
+            p.state == 'Z'
+            ||
             p.state == 'D'
         ) {
-            attroff(A_BOLD);
+            attroff(
+                A_BOLD
+            );
         }
 
-        if (index == selected) {
-            attroff(A_REVERSE);
+        if (
+            index == selected
+        ) {
+            attroff(
+                A_REVERSE
+            );
         }
     }
 
     mvhline(
-        height - 3,
+        height - 4,
         0,
         ACS_HLINE,
         width
     );
 
     mvprintw(
-        height - 2,
+        height - 3,
         0,
         "%s",
         message.c_str()
     );
 
     mvprintw(
+        height - 2,
+        0,
+        "t Arbol | h Hilos | g Historico | k Term | K Kill | s Stop | r Resume | p Prioridad"
+    );
+
+    mvprintw(
         height - 1,
         0,
-        "q Salir | c CPU | m MEM | f Filtro | +/- Refresco | k Term | K Kill | s Stop | r Resume | p Prioridad"
+        "q Salir | Flechas Mover | c CPU | m MEM | f Filtro | +/- Refresco"
     );
 
     refresh();
 }
+
+// --------------------------------------------------
+// ENTRADA Y CONFIRMACIONES
+// --------------------------------------------------
 
 static std::string askText(
     const std::string& prompt
@@ -396,7 +984,9 @@ static std::string askText(
     noecho();
     curs_set(0);
 
-    return std::string(buffer);
+    return std::string(
+        buffer
+    );
 }
 
 static bool confirmAction(
@@ -430,13 +1020,19 @@ static bool confirmAction(
         process.name.c_str()
     );
 
-    int key = getch();
+    int key =
+        getch();
 
     return (
-        key == 'y' ||
+        key == 'y'
+        ||
         key == 'Y'
     );
 }
+
+// --------------------------------------------------
+// LOOP PRINCIPAL
+// --------------------------------------------------
 
 void runTui() {
 
@@ -444,6 +1040,7 @@ void runTui() {
 
     cbreak();
     noecho();
+
     keypad(
         stdscr,
         TRUE
@@ -451,16 +1048,23 @@ void runTui() {
 
     curs_set(0);
 
-    int refreshMs = 1000;
+    int refreshMs =
+        1000;
 
     SortMode sortMode =
         SortMode::CPU;
 
     std::string filter;
+
     std::string message =
         "Monitor iniciado.";
 
     int selected = 0;
+
+    std::unordered_map<
+        int,
+        std::deque<double>
+    > cpuHistory;
 
     auto previousProcesses =
         readProcesses();
@@ -487,6 +1091,11 @@ void runTui() {
             previousTotalCpu
         );
 
+        updateHistory(
+            currentProcesses,
+            cpuHistory
+        );
+
         SystemInfo system =
             readSystemInfo(
                 currentProcesses
@@ -503,7 +1112,9 @@ void runTui() {
             sortMode
         );
 
-        if (visibleProcesses.empty()) {
+        if (
+            visibleProcesses.empty()
+        ) {
             selected = 0;
         }
         else if (
@@ -528,21 +1139,28 @@ void runTui() {
             message
         );
 
-        timeout(refreshMs);
+        timeout(
+            refreshMs
+        );
 
-        int key = getch();
+        int key =
+            getch();
 
         if (key == 'q') {
             running = false;
         }
 
-        else if (key == KEY_UP) {
+        else if (
+            key == KEY_UP
+        ) {
             if (selected > 0) {
                 selected--;
             }
         }
 
-        else if (key == KEY_DOWN) {
+        else if (
+            key == KEY_DOWN
+        ) {
             if (
                 selected + 1
                 <
@@ -555,6 +1173,7 @@ void runTui() {
         }
 
         else if (key == 'c') {
+
             sortMode =
                 SortMode::CPU;
 
@@ -565,6 +1184,7 @@ void runTui() {
         }
 
         else if (key == 'm') {
+
             sortMode =
                 SortMode::MEMORY;
 
@@ -575,6 +1195,7 @@ void runTui() {
         }
 
         else if (key == 'f') {
+
             filter =
                 askText(
                     "Filtro (vacio = quitar): "
@@ -589,9 +1210,12 @@ void runTui() {
         }
 
         else if (key == '+') {
+
             refreshMs -= 250;
 
-            if (refreshMs < 250) {
+            if (
+                refreshMs < 250
+            ) {
                 refreshMs = 250;
             }
 
@@ -600,9 +1224,12 @@ void runTui() {
         }
 
         else if (key == '-') {
+
             refreshMs += 250;
 
-            if (refreshMs > 5000) {
+            if (
+                refreshMs > 5000
+            ) {
                 refreshMs = 5000;
             }
 
@@ -610,18 +1237,52 @@ void runTui() {
                 "Intervalo aumentado.";
         }
 
+        else if (key == 't') {
+
+            showProcessTree(
+                currentProcesses
+            );
+
+            message =
+                "Vista de arbol cerrada.";
+        }
+
         else if (
             !visibleProcesses.empty()
         ) {
-            const ProcessInfo& process =
-                visibleProcesses[selected];
+            const ProcessInfo&
+                process =
+                    visibleProcesses[
+                        selected
+                    ];
 
             ControlResult result{
                 false,
                 ""
             };
 
-            if (key == 'k') {
+            if (key == 'h') {
+
+                showThreads(
+                    process
+                );
+
+                message =
+                    "Vista de hilos cerrada.";
+            }
+
+            else if (key == 'g') {
+
+                showHistory(
+                    process,
+                    cpuHistory
+                );
+
+                message =
+                    "Historico cerrado.";
+            }
+
+            else if (key == 'k') {
 
                 if (
                     confirmAction(
@@ -717,8 +1378,11 @@ void runTui() {
                     );
 
                 try {
+
                     int priority =
-                        std::stoi(value);
+                        std::stoi(
+                            value
+                        );
 
                     result =
                         changeProcessPriority(
@@ -730,6 +1394,7 @@ void runTui() {
                         result.message;
                 }
                 catch (...) {
+
                     message =
                         "Prioridad invalida.";
                 }
