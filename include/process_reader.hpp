@@ -20,11 +20,14 @@ struct ProcessInfo {
 
     unsigned long utime = 0;
     unsigned long stime = 0;
+
     double cpuTimeSeconds = 0.0;
+    double cpuPercent = 0.0;
 
     std::string command;
 };
 
 std::vector<ProcessInfo> readProcesses();
+unsigned long long readTotalCpuTime();
 
 #endif
