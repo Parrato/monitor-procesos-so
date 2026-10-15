@@ -15,9 +15,8 @@ static double kbToGB(long kb) {
 
 int main() {
 
-    // Primera lectura para calcular %CPU.
+    // Primera lectura para calcular %CPU
     auto previousProcesses = readProcesses();
-
     unsigned long long previousTotalCpu =
         readTotalCpuTime();
 
@@ -25,19 +24,16 @@ int main() {
         std::chrono::seconds(1)
     );
 
-    // Segunda lectura.
+    // Segunda lectura
     auto processes = readProcesses();
-
     unsigned long long currentTotalCpu =
         readTotalCpuTime();
 
     unsigned long long totalDelta =
         currentTotalCpu - previousTotalCpu;
 
-    std::unordered_map<
-        int,
-        unsigned long long
-    > previousCpu;
+    std::unordered_map<int, unsigned long long>
+        previousCpu;
 
     for (const auto& p : previousProcesses) {
         previousCpu[p.pid] =
@@ -60,18 +56,13 @@ int main() {
 
             p.cpuPercent =
                 (
-                    static_cast<double>(
-                        processDelta
-                    )
+                    static_cast<double>(processDelta)
                     /
-                    static_cast<double>(
-                        totalDelta
-                    )
+                    static_cast<double>(totalDelta)
                 ) * 100.0;
         }
     }
 
-    // Información global de la máquina.
     SystemInfo system =
         readSystemInfo(processes);
 
@@ -81,27 +72,20 @@ int main() {
     std::cout
         << "Procesos: "
         << system.totalProcesses
-
         << " | Running: "
         << system.runningProcesses
-
         << " | Detenidos: "
         << system.stoppedProcesses
-
         << " | Zombies: "
         << system.zombieProcesses
-
         << '\n';
 
     std::cout
         << std::fixed
         << std::setprecision(2)
-
         << "Load Average: "
-        << system.load1
-        << " "
-        << system.load5
-        << " "
+        << system.load1 << " "
+        << system.load5 << " "
         << system.load15
         << '\n';
 
@@ -109,10 +93,8 @@ int main() {
         << "RAM: "
         << kbToGB(system.memUsedKB)
         << " GB usada / "
-
         << kbToGB(system.memTotalKB)
         << " GB total | "
-
         << kbToGB(system.memAvailableKB)
         << " GB disponible\n";
 

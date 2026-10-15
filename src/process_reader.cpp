@@ -28,7 +28,7 @@ static long readTotalMemoryKB() {
     std::ifstream file("/proc/meminfo");
 
     std::string key;
-    long value = 0;
+    long value;
     std::string unit;
 
     while (file >> key >> value >> unit) {
@@ -90,12 +90,15 @@ static void readStatus(ProcessInfo& process) {
         if (key == "VmRSS:") {
             file >> process.rssKB;
         }
+
         else if (key == "Threads:") {
             file >> process.threads;
         }
+
         else if (key == "Uid:") {
-            unsigned int uid = 0;
+            unsigned int uid;
             file >> uid;
+
             process.user = getUserName(uid);
         }
 
@@ -132,10 +135,7 @@ static bool readStat(ProcessInfo& process) {
 
     std::istringstream iss(remaining);
 
-    // Campo 3
     iss >> process.state;
-
-    // Campo 4
     iss >> process.ppid;
 
     long dummy = 0;
@@ -158,7 +158,6 @@ static bool readStat(ProcessInfo& process) {
 
     return true;
 }
-
 unsigned long long readTotalCpuTime() {
     std::ifstream file("/proc/stat");
 
@@ -195,16 +194,14 @@ unsigned long long readTotalCpuTime() {
          + irq
          + softirq
          + steal;
-}
-
+}   
 std::vector<ProcessInfo> readProcesses() {
     std::vector<ProcessInfo> processes;
 
     long totalMemoryKB = readTotalMemoryKB();
     long ticksPerSecond = sysconf(_SC_CLK_TCK);
 
-    for (const auto& entry :
-         fs::directory_iterator("/proc")) {
+    for (const auto& entry : fs::directory_iterator("/proc")) {
 
         if (!entry.is_directory()) {
             continue;
@@ -220,7 +217,6 @@ std::vector<ProcessInfo> readProcesses() {
         ProcessInfo process;
         process.pid = std::stoi(filename);
 
-        // Un proceso puede desaparecer mientras lo leemos.
         if (!readStat(process)) {
             continue;
         }
@@ -237,14 +233,14 @@ std::vector<ProcessInfo> readProcesses() {
         if (totalMemoryKB > 0) {
             process.memPercent =
                 (static_cast<double>(process.rssKB) /
-                 static_cast<double>(totalMemoryKB)) * 100.0;
+                 totalMemoryKB) * 100.0;
         }
 
         if (ticksPerSecond > 0) {
             process.cpuTimeSeconds =
                 static_cast<double>(
                     process.utime + process.stime
-                ) / static_cast<double>(ticksPerSecond);
+                ) / ticksPerSecond;
         }
 
         processes.push_back(process);

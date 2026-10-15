@@ -23,18 +23,17 @@ static void readMemoryInfo(SystemInfo& info) {
     }
 
     std::string key;
-    long value = 0;
-    std::string unit;
 
-    while (file >> key >> value >> unit) {
-
+    while (file >> key) {
         if (key == "MemTotal:") {
-            info.memTotalKB = value;
+            file >> info.memTotalKB;
+        }
+        else if (key == "MemAvailable:") {
+            file >> info.memAvailableKB;
         }
 
-        else if (key == "MemAvailable:") {
-            info.memAvailableKB = value;
-        }
+        std::string rest;
+        std::getline(file, rest);
     }
 
     info.memUsedKB =
@@ -54,14 +53,12 @@ SystemInfo readSystemInfo(
         if (process.state == 'R') {
             info.runningProcesses++;
         }
-
         else if (
             process.state == 'T' ||
             process.state == 't'
         ) {
             info.stoppedProcesses++;
         }
-
         else if (process.state == 'Z') {
             info.zombieProcesses++;
         }
