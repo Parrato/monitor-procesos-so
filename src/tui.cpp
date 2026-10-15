@@ -1,13 +1,12 @@
 #include "../include/tui.hpp"
 #include "../include/process_reader.hpp"
 #include "../include/system_reader.hpp"
+#include "../include/process_control.hpp"
 
 #include <ncurses.h>
 
 #include <algorithm>
-#include <chrono>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -75,10 +74,12 @@ static std::vector<ProcessInfo> filterProcesses(
     std::vector<ProcessInfo> result;
 
     for (const auto& p : processes) {
-
         if (
-            p.name.find(filter) != std::string::npos ||
-            p.command.find(filter) != std::string::npos
+            p.name.find(filter)
+                != std::string::npos
+            ||
+            p.command.find(filter)
+                != std::string::npos
         ) {
             result.push_back(p);
         }
@@ -96,8 +97,10 @@ static void sortProcesses(
         std::sort(
             processes.begin(),
             processes.end(),
-            [](const ProcessInfo& a, const ProcessInfo& b) {
-                return a.cpuPercent > b.cpuPercent;
+            [](const ProcessInfo& a,
+               const ProcessInfo& b) {
+                return a.cpuPercent
+                    > b.cpuPercent;
             }
         );
     }
@@ -106,7 +109,8 @@ static void sortProcesses(
         std::sort(
             processes.begin(),
             processes.end(),
-            [](const ProcessInfo& a, const ProcessInfo& b) {
+            [](const ProcessInfo& a,
+               const ProcessInfo& b) {
                 return a.rssKB > b.rssKB;
             }
         );
@@ -132,7 +136,10 @@ static std::string shorten(
         return text.substr(0, maxLength);
     }
 
-    return text.substr(0, maxLength - 3) + "...";
+    return text.substr(
+        0,
+        maxLength - 3
+    ) + "...";
 }
 
 static void drawScreen(
@@ -141,31 +148,39 @@ static void drawScreen(
     int selected,
     SortMode sortMode,
     const std::string& filter,
-    int refreshMs
+    int refreshMs,
+    const std::string& message
 ) {
     erase();
 
     int height;
     int width;
 
-    getmaxyx(stdscr, height, width);
+    getmaxyx(
+        stdscr,
+        height,
+        width
+    );
 
     double totalGB =
-        static_cast<double>(system.memTotalKB)
-        / 1024.0 / 1024.0;
+        static_cast<double>(
+            system.memTotalKB
+        ) / 1024.0 / 1024.0;
 
     double usedGB =
-        static_cast<double>(system.memUsedKB)
-        / 1024.0 / 1024.0;
+        static_cast<double>(
+            system.memUsedKB
+        ) / 1024.0 / 1024.0;
 
     double availableGB =
-        static_cast<double>(system.memAvailableKB)
-        / 1024.0 / 1024.0;
+        static_cast<double>(
+            system.memAvailableKB
+        ) / 1024.0 / 1024.0;
 
     mvprintw(
         0,
         0,
-        "MONITOR DE PROCESOS | Total:%d Run:%d Stop:%d Zombie:%d",
+        "MONITOR | Total:%d Run:%d Stop:%d Zombie:%d",
         system.totalProcesses,
         system.runningProcesses,
         system.stoppedProcesses,
@@ -175,7 +190,7 @@ static void drawScreen(
     mvprintw(
         1,
         0,
-        "Load: %.2f %.2f %.2f | RAM: %.2f/%.2f GB | Disp: %.2f GB",
+        "Load %.2f %.2f %.2f | RAM %.2f/%.2f GB | Disp %.2f GB",
         system.load1,
         system.load5,
         system.load15,
@@ -187,7 +202,7 @@ static void drawScreen(
     mvprintw(
         2,
         0,
-        "Orden: %s | Refresco: %.1fs | Filtro: %s",
+        "Orden:%s | Refresco:%.2fs | Filtro:%s",
         sortMode == SortMode::CPU
             ? "CPU"
             : "MEM",
@@ -221,11 +236,13 @@ static void drawScreen(
         "COMMAND"
     );
 
-    int firstTableRow = 5;
-    int footerRows = 2;
+    const int firstTableRow = 5;
+    const int footerRows = 3;
 
     int availableRows =
-        height - firstTableRow - footerRows;
+        height
+        - firstTableRow
+        - footerRows;
 
     if (availableRows < 1) {
         availableRows = 1;
@@ -235,7 +252,9 @@ static void drawScreen(
 
     if (selected >= availableRows) {
         start =
-            selected - availableRows + 1;
+            selected
+            - availableRows
+            + 1;
     }
 
     for (
@@ -243,30 +262,41 @@ static void drawScreen(
         screenRow < availableRows;
         screenRow++
     ) {
-        int index = start + screenRow;
+        int index =
+            start + screenRow;
 
         if (
             index >=
-            static_cast<int>(processes.size())
+            static_cast<int>(
+                processes.size()
+            )
         ) {
             break;
         }
 
-        const auto& p = processes[index];
+        const auto& p =
+            processes[index];
 
         int row =
-            firstTableRow + screenRow;
+            firstTableRow
+            + screenRow;
 
         if (index == selected) {
             attron(A_REVERSE);
         }
 
-        if (p.state == 'Z') {
+        if (
+            p.state == 'Z' ||
+            p.state == 'D'
+        ) {
             attron(A_BOLD);
         }
 
         int commandWidth =
-            std::max(10, width - 83);
+            std::max(
+                10,
+                width - 83
+            );
 
         std::string command =
             shorten(
@@ -291,7 +321,10 @@ static void drawScreen(
             command.c_str()
         );
 
-        if (p.state == 'Z') {
+        if (
+            p.state == 'Z' ||
+            p.state == 'D'
+        ) {
             attroff(A_BOLD);
         }
 
@@ -301,41 +334,58 @@ static void drawScreen(
     }
 
     mvhline(
-        height - 2,
+        height - 3,
         0,
         ACS_HLINE,
         width
     );
 
     mvprintw(
+        height - 2,
+        0,
+        "%s",
+        message.c_str()
+    );
+
+    mvprintw(
         height - 1,
         0,
-        "q Salir | Flechas Seleccionar | c CPU | m MEM | f Filtro | +/- Refresco"
+        "q Salir | c CPU | m MEM | f Filtro | +/- Refresco | k Term | K Kill | s Stop | r Resume | p Prioridad"
     );
 
     refresh();
 }
 
-static std::string askFilter() {
+static std::string askText(
+    const std::string& prompt
+) {
     int height;
     int width;
 
-    getmaxyx(stdscr, height, width);
+    getmaxyx(
+        stdscr,
+        height,
+        width
+    );
 
     echo();
     curs_set(1);
-
     timeout(-1);
 
     char buffer[128] = {};
 
-    move(height - 1, 0);
+    move(
+        height - 1,
+        0
+    );
+
     clrtoeol();
 
     mvprintw(
         height - 1,
         0,
-        "Filtro (Enter vacio = quitar): "
+        "%s",
+        prompt.c_str()
     );
 
     getnstr(
@@ -349,14 +399,55 @@ static std::string askFilter() {
     return std::string(buffer);
 }
 
+static bool confirmAction(
+    const ProcessInfo& process,
+    const std::string& action
+) {
+    int height;
+    int width;
+
+    getmaxyx(
+        stdscr,
+        height,
+        width
+    );
+
+    timeout(-1);
+
+    move(
+        height - 1,
+        0
+    );
+
+    clrtoeol();
+
+    mvprintw(
+        height - 1,
+        0,
+        "%s PID %d (%s)? [y/N]: ",
+        action.c_str(),
+        process.pid,
+        process.name.c_str()
+    );
+
+    int key = getch();
+
+    return (
+        key == 'y' ||
+        key == 'Y'
+    );
+}
+
 void runTui() {
 
     initscr();
 
     cbreak();
     noecho();
-
-    keypad(stdscr, TRUE);
+    keypad(
+        stdscr,
+        TRUE
+    );
 
     curs_set(0);
 
@@ -366,78 +457,28 @@ void runTui() {
         SortMode::CPU;
 
     std::string filter;
+    std::string message =
+        "Monitor iniciado.";
 
     int selected = 0;
 
     auto previousProcesses =
         readProcesses();
 
-    unsigned long long previousTotalCpu =
-        readTotalCpuTime();
+    unsigned long long
+        previousTotalCpu =
+            readTotalCpuTime();
 
     bool running = true;
 
     while (running) {
 
-        timeout(refreshMs);
-
-        int key = getch();
-
-        if (key == 'q') {
-            running = false;
-            continue;
-        }
-
-        if (key == KEY_UP) {
-            if (selected > 0) {
-                selected--;
-            }
-        }
-
-        else if (key == KEY_DOWN) {
-            selected++;
-        }
-
-        else if (key == 'c') {
-            sortMode =
-                SortMode::CPU;
-
-            selected = 0;
-        }
-
-        else if (key == 'm') {
-            sortMode =
-                SortMode::MEMORY;
-
-            selected = 0;
-        }
-
-        else if (key == 'f') {
-            filter = askFilter();
-            selected = 0;
-        }
-
-        else if (key == '+') {
-            refreshMs -= 250;
-
-            if (refreshMs < 250) {
-                refreshMs = 250;
-            }
-        }
-
-        else if (key == '-') {
-            refreshMs += 250;
-
-            if (refreshMs > 5000) {
-                refreshMs = 5000;
-            }
-        }
-
         auto currentProcesses =
             readProcesses();
 
-        unsigned long long currentTotalCpu =
-            readTotalCpuTime();
+        unsigned long long
+            currentTotalCpu =
+                readTotalCpuTime();
 
         calculateCpuPercent(
             currentProcesses,
@@ -483,11 +524,220 @@ void runTui() {
             selected,
             sortMode,
             filter,
-            refreshMs
+            refreshMs,
+            message
         );
 
+        timeout(refreshMs);
+
+        int key = getch();
+
+        if (key == 'q') {
+            running = false;
+        }
+
+        else if (key == KEY_UP) {
+            if (selected > 0) {
+                selected--;
+            }
+        }
+
+        else if (key == KEY_DOWN) {
+            if (
+                selected + 1
+                <
+                static_cast<int>(
+                    visibleProcesses.size()
+                )
+            ) {
+                selected++;
+            }
+        }
+
+        else if (key == 'c') {
+            sortMode =
+                SortMode::CPU;
+
+            selected = 0;
+
+            message =
+                "Ordenado por CPU.";
+        }
+
+        else if (key == 'm') {
+            sortMode =
+                SortMode::MEMORY;
+
+            selected = 0;
+
+            message =
+                "Ordenado por memoria.";
+        }
+
+        else if (key == 'f') {
+            filter =
+                askText(
+                    "Filtro (vacio = quitar): "
+                );
+
+            selected = 0;
+
+            message =
+                filter.empty()
+                ? "Filtro eliminado."
+                : "Filtro aplicado.";
+        }
+
+        else if (key == '+') {
+            refreshMs -= 250;
+
+            if (refreshMs < 250) {
+                refreshMs = 250;
+            }
+
+            message =
+                "Intervalo reducido.";
+        }
+
+        else if (key == '-') {
+            refreshMs += 250;
+
+            if (refreshMs > 5000) {
+                refreshMs = 5000;
+            }
+
+            message =
+                "Intervalo aumentado.";
+        }
+
+        else if (
+            !visibleProcesses.empty()
+        ) {
+            const ProcessInfo& process =
+                visibleProcesses[selected];
+
+            ControlResult result{
+                false,
+                ""
+            };
+
+            if (key == 'k') {
+
+                if (
+                    confirmAction(
+                        process,
+                        "Terminar"
+                    )
+                ) {
+                    result =
+                        terminateProcess(
+                            process.pid
+                        );
+
+                    message =
+                        result.message;
+                }
+                else {
+                    message =
+                        "Accion cancelada.";
+                }
+            }
+
+            else if (key == 'K') {
+
+                if (
+                    confirmAction(
+                        process,
+                        "FORZAR terminacion"
+                    )
+                ) {
+                    result =
+                        forceKillProcess(
+                            process.pid
+                        );
+
+                    message =
+                        result.message;
+                }
+                else {
+                    message =
+                        "Accion cancelada.";
+                }
+            }
+
+            else if (key == 's') {
+
+                if (
+                    confirmAction(
+                        process,
+                        "Suspender"
+                    )
+                ) {
+                    result =
+                        suspendProcess(
+                            process.pid
+                        );
+
+                    message =
+                        result.message;
+                }
+                else {
+                    message =
+                        "Accion cancelada.";
+                }
+            }
+
+            else if (key == 'r') {
+
+                if (
+                    confirmAction(
+                        process,
+                        "Reanudar"
+                    )
+                ) {
+                    result =
+                        resumeProcess(
+                            process.pid
+                        );
+
+                    message =
+                        result.message;
+                }
+                else {
+                    message =
+                        "Accion cancelada.";
+                }
+            }
+
+            else if (key == 'p') {
+
+                std::string value =
+                    askText(
+                        "Nueva prioridad (-20 a 19): "
+                    );
+
+                try {
+                    int priority =
+                        std::stoi(value);
+
+                    result =
+                        changeProcessPriority(
+                            process.pid,
+                            priority
+                        );
+
+                    message =
+                        result.message;
+                }
+                catch (...) {
+                    message =
+                        "Prioridad invalida.";
+                }
+            }
+        }
+
         previousProcesses =
-            std::move(currentProcesses);
+            currentProcesses;
 
         previousTotalCpu =
             currentTotalCpu;

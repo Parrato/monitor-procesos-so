@@ -5,6 +5,7 @@ LIBS = -lncurses
 SRC = src/main.cpp \
       src/process_reader.cpp \
       src/system_reader.cpp \
+      src/process_control.cpp \
       src/tui.cpp
 
 TARGET = monitor
@@ -16,4 +17,4 @@ run: all
 	./$(TARGET)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET)	
