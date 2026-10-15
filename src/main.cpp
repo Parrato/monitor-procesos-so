@@ -1,4 +1,5 @@
 #include "../include/process_reader.hpp"
+#include "../include/system_reader.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -6,43 +7,51 @@
 #include <chrono>
 #include <unordered_map>
 
+static double kbToGB(long kb) {
+    return static_cast<double>(kb)
+        / 1024.0
+        / 1024.0;
+}
+
 int main() {
 
-    // Primera lectura
+    // Primera lectura para calcular %CPU.
     auto previousProcesses = readProcesses();
+
     unsigned long long previousTotalCpu =
         readTotalCpuTime();
 
-    // Esperamos para medir cuánto cambian los contadores
     std::this_thread::sleep_for(
         std::chrono::seconds(1)
     );
 
-    // Segunda lectura
+    // Segunda lectura.
     auto processes = readProcesses();
+
     unsigned long long currentTotalCpu =
         readTotalCpuTime();
 
     unsigned long long totalDelta =
         currentTotalCpu - previousTotalCpu;
 
-    // PID -> tiempo de CPU anterior
-    std::unordered_map<int, unsigned long long>
-        previousCpu;
+    std::unordered_map<
+        int,
+        unsigned long long
+    > previousCpu;
 
     for (const auto& p : previousProcesses) {
         previousCpu[p.pid] =
             p.utime + p.stime;
     }
 
-    // Calculamos %CPU
     for (auto& p : processes) {
 
         auto it = previousCpu.find(p.pid);
 
-        if (it != previousCpu.end() &&
-            totalDelta > 0) {
-
+        if (
+            it != previousCpu.end() &&
+            totalDelta > 0
+        ) {
             unsigned long long currentProcessCpu =
                 p.utime + p.stime;
 
@@ -50,11 +59,65 @@ int main() {
                 currentProcessCpu - it->second;
 
             p.cpuPercent =
-                (static_cast<double>(processDelta) /
-                 static_cast<double>(totalDelta))
-                * 100.0;
+                (
+                    static_cast<double>(
+                        processDelta
+                    )
+                    /
+                    static_cast<double>(
+                        totalDelta
+                    )
+                ) * 100.0;
         }
     }
+
+    // Información global de la máquina.
+    SystemInfo system =
+        readSystemInfo(processes);
+
+    std::cout
+        << "\n================ MONITOR DE PROCESOS ================\n";
+
+    std::cout
+        << "Procesos: "
+        << system.totalProcesses
+
+        << " | Running: "
+        << system.runningProcesses
+
+        << " | Detenidos: "
+        << system.stoppedProcesses
+
+        << " | Zombies: "
+        << system.zombieProcesses
+
+        << '\n';
+
+    std::cout
+        << std::fixed
+        << std::setprecision(2)
+
+        << "Load Average: "
+        << system.load1
+        << " "
+        << system.load5
+        << " "
+        << system.load15
+        << '\n';
+
+    std::cout
+        << "RAM: "
+        << kbToGB(system.memUsedKB)
+        << " GB usada / "
+
+        << kbToGB(system.memTotalKB)
+        << " GB total | "
+
+        << kbToGB(system.memAvailableKB)
+        << " GB disponible\n";
+
+    std::cout
+        << "======================================================\n\n";
 
     std::cout
         << std::left
@@ -106,11 +169,6 @@ int main() {
             << p.command
             << '\n';
     }
-
-    std::cout
-        << "\nProcesos encontrados: "
-        << processes.size()
-        << '\n';
 
     return 0;
 }

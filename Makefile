@@ -1,7 +1,10 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -Iinclude
 
-SRC = src/main.cpp src/process_reader.cpp
+SRC = src/main.cpp \
+      src/process_reader.cpp \
+      src/system_reader.cpp
+
 TARGET = monitor
 
 all:
@@ -11,4 +14,4 @@ run: all
 	./$(TARGET)
 
 clean:
-	rm -f $(TARGET)	
+	rm -f $(TARGET)
