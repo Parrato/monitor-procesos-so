@@ -5,6 +5,8 @@
 #include <sstream>
 #include <iterator>
 #include <cctype>
+#include <pwd.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
 
@@ -20,6 +22,32 @@ static bool isNumber(const std::string& text) {
     }
 
     return true;
+}
+
+static long readTotalMemoryKB() {
+    std::ifstream file("/proc/meminfo");
+
+    std::string key;
+    long value;
+    std::string unit;
+
+    while (file >> key >> value >> unit) {
+        if (key == "MemTotal:") {
+            return value;
+        }
+    }
+
+    return 0;
+}
+
+static std::string getUserName(unsigned int uid) {
+    struct passwd* pwd = getpwuid(uid);
+
+    if (pwd != nullptr) {
+        return pwd->pw_name;
+    }
+
+    return std::to_string(uid);
 }
 
 static std::string readCommand(int pid) {
@@ -62,8 +90,16 @@ static void readStatus(ProcessInfo& process) {
         if (key == "VmRSS:") {
             file >> process.rssKB;
         }
+
         else if (key == "Threads:") {
             file >> process.threads;
+        }
+
+        else if (key == "Uid:") {
+            unsigned int uid;
+            file >> uid;
+
+            process.user = getUserName(uid);
         }
 
         std::string rest;
@@ -99,10 +135,7 @@ static bool readStat(ProcessInfo& process) {
 
     std::istringstream iss(remaining);
 
-    // Campo 3: state
     iss >> process.state;
-
-    // Campo 4: PPID
     iss >> process.ppid;
 
     long dummy = 0;
@@ -120,7 +153,7 @@ static bool readStat(ProcessInfo& process) {
     iss >> dummy;
     iss >> dummy;
 
-    // Campo 18: prioridad
+    // Campo 18
     iss >> process.priority;
 
     return true;
@@ -128,6 +161,9 @@ static bool readStat(ProcessInfo& process) {
 
 std::vector<ProcessInfo> readProcesses() {
     std::vector<ProcessInfo> processes;
+
+    long totalMemoryKB = readTotalMemoryKB();
+    long ticksPerSecond = sysconf(_SC_CLK_TCK);
 
     for (const auto& entry : fs::directory_iterator("/proc")) {
 
@@ -143,10 +179,8 @@ std::vector<ProcessInfo> readProcesses() {
         }
 
         ProcessInfo process;
-
         process.pid = std::stoi(filename);
 
-        // Un proceso puede desaparecer mientras lo estamos leyendo.
         if (!readStat(process)) {
             continue;
         }
@@ -158,6 +192,19 @@ std::vector<ProcessInfo> readProcesses() {
 
         if (process.command.empty()) {
             process.command = process.name;
+        }
+
+        if (totalMemoryKB > 0) {
+            process.memPercent =
+                (static_cast<double>(process.rssKB) /
+                 totalMemoryKB) * 100.0;
+        }
+
+        if (ticksPerSecond > 0) {
+            process.cpuTimeSeconds =
+                static_cast<double>(
+                    process.utime + process.stime
+                ) / ticksPerSecond;
         }
 
         processes.push_back(process);
