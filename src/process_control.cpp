@@ -1,5 +1,4 @@
-#include "../include/process_control.hpp"
-
+#include "process_control.hpp"
 #include <signal.h>
 #include <sys/resource.h>
 
